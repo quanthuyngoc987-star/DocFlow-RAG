@@ -15,12 +15,6 @@ models/
 *.swp
 *.swo
 
-# Imported project runtime artifacts
-zhisaotong-Agent/.idea/
-zhisaotong-Agent/logs/
-zhisaotong-Agent/chroma_db/
-zhisaotong-Agent/__pycache__/
-
 # OS
 .DS_Store
 Thumbs.db
