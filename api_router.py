@@ -13,7 +13,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 # 从重构后的模块导入
-from config import SILICONFLOW_API_KEY
+from config import DEEPSEEK_API_KEY
 from core.generator import query_answer
 from core.vector_store import vector_store
 from features.web_search import check_serpapi_key
@@ -58,7 +58,7 @@ app.add_middleware(
 class QuestionRequest(BaseModel):
     question: str
     enable_web_search: bool = False
-    model_choice: str = "siliconflow"
+    model_choice: str = "deepseek"
 
 
 class AnswerResponse(BaseModel):
@@ -129,9 +129,10 @@ async def ask_question(req: QuestionRequest):
 
 @app.get("/api/status")
 async def check_status():
+    deepseek_configured = bool(DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("Your"))
     return {
         "status": "healthy",
-        "siliconflow_configured": bool(SILICONFLOW_API_KEY and not SILICONFLOW_API_KEY.startswith("Your")),
+        "deepseek_configured": deepseek_configured,
         "serpapi_configured": check_serpapi_key(),
         "vector_store_ready": vector_store.is_ready,
         "total_chunks": vector_store.total_chunks,

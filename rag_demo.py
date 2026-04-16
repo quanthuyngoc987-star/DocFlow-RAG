@@ -22,8 +22,7 @@ from datetime import datetime
 
 # 导入配置
 from config import (
-    DEFAULT_MODEL_CHOICE, SILICONFLOW_API_KEY,
-    OLLAMA_MODEL_NAME, SILICONFLOW_MODEL_NAME
+    DEEPSEEK_API_KEY, DEEPSEEK_MODEL_NAME
 )
 
 # 导入核心模块
@@ -32,7 +31,7 @@ from core.text_splitter import split_text
 from core.embeddings import encode_texts
 from core.vector_store import vector_store
 from core.bm25_index import bm25_manager
-from core.generator import query_answer, call_siliconflow_api
+from core.generator import query_answer, call_deepseek_api
 
 # 导入工具
 from utils.network import is_port_available
@@ -195,8 +194,7 @@ def get_system_models_info():
         "分块方法": "RecursiveCharacterTextSplitter (chunk_size=400, overlap=40)",
         "检索方法": "向量检索 + BM25混合检索 (α=0.7)",
         "重排序模型": "交叉编码器 (distiluse-base-multilingual-cased-v2)",
-        "生成模型(Ollama)": OLLAMA_MODEL_NAME,
-        "生成模型(SiliconFlow)": SILICONFLOW_MODEL_NAME,
+        "生成模型(DeepSeek)": DEEPSEEK_MODEL_NAME,
         "分词工具": "jieba (中文分词)"
     }
 
@@ -270,11 +268,6 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
                             web_search_checkbox = gr.Checkbox(
                                 label="启用联网搜索", value=False,
                                 info="打开后将同时搜索网络内容（需配置SERPAPI_KEY）"
-                            )
-                            model_choice = gr.Dropdown(
-                                choices=["ollama", "siliconflow"],
-                                value=DEFAULT_MODEL_CHOICE,
-                                label="模型选择", info="选择使用本地模型或云端模型"
                             )
                         with gr.Row():
                             ask_btn = gr.Button("🔍 开始提问", variant="primary", scale=2)
@@ -356,18 +349,18 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
     def clear_chat_history():
         return [], "对话已清空"
 
-    def process_chat(question, history, enable_web_search, model_choice_val):
+    def process_chat(question, history, enable_web_search):
         if history is None or not isinstance(history, list):
             history = []
+        previous_history = list(history)
 
         api_text = """<div class="api-info" style="margin-top:10px;padding:10px;border-radius:5px;
             background:var(--panel-bg);border:1px solid var(--border-color);">
             <p>📢 <strong>功能说明：</strong></p>
             <p>1. <strong>联网搜索</strong>：%s</p>
-            <p>2. <strong>模型选择</strong>：当前使用 <strong>%s</strong></p>
+            <p>2. <strong>模型后端</strong>：当前使用 <strong>Cloud DeepSeek 模型</strong></p>
         </div>""" % (
-            "已启用" if enable_web_search else "未启用",
-            "Cloud DeepSeek-R1 模型" if model_choice_val == "siliconflow" else "本地 Ollama 模型"
+            "已启用" if enable_web_search else "未启用"
         )
 
         if not question or question.strip() == "":
@@ -381,7 +374,11 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
         yield history, "", api_text
 
         try:
-            answer = query_answer(question, enable_web_search, model_choice_val)
+            answer = query_answer(
+                question,
+                enable_web_search,
+                chat_history=previous_history
+            )
         except Exception as e:
             answer = f"系统错误: {str(e)}"
             logging.error(f"问答处理异常: {str(e)}")
@@ -389,15 +386,14 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
         history[-1] = {"role": "assistant", "content": answer}
         yield history, "", api_text
 
-    def update_api_info(enable_web_search, model_choice_val):
+    def update_api_info(enable_web_search):
         return """<div class="api-info" style="margin-top:10px;padding:10px;border-radius:5px;
             background:var(--panel-bg);border:1px solid var(--border-color);">
             <p>📢 <strong>功能说明：</strong></p>
             <p>1. <strong>联网搜索</strong>：%s</p>
-            <p>2. <strong>模型选择</strong>：当前使用 <strong>%s</strong></p>
+            <p>2. <strong>模型后端</strong>：当前使用 <strong>Cloud DeepSeek 模型</strong></p>
         </div>""" % (
-            "已启用" if enable_web_search else "未启用",
-            "Cloud DeepSeek-R1 模型" if model_choice_val == "siliconflow" else "本地 Ollama 模型"
+            "已启用" if enable_web_search else "未启用"
         )
 
     def get_system_metrics():
@@ -439,11 +435,10 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
 
     # ━━━ 绑定事件 ━━━
     upload_btn.click(process_multiple_files, inputs=[file_input], outputs=[upload_status, file_list], show_progress=True)
-    ask_btn.click(process_chat, inputs=[question_input, chatbot, web_search_checkbox, model_choice],
+    ask_btn.click(process_chat, inputs=[question_input, chatbot, web_search_checkbox],
                   outputs=[chatbot, question_input, api_info], show_progress=True)
     clear_btn.click(clear_chat_history, inputs=[], outputs=[chatbot, status_display])
-    web_search_checkbox.change(update_api_info, inputs=[web_search_checkbox, model_choice], outputs=[api_info])
-    model_choice.change(update_api_info, inputs=[web_search_checkbox, model_choice], outputs=[api_info])
+    web_search_checkbox.change(update_api_info, inputs=[web_search_checkbox], outputs=[api_info])
     refresh_chunks_btn.click(fn=get_document_chunks, outputs=[chunks_data, chunks_status])
     chunks_data.select(fn=show_chunk_details, outputs=chunk_detail_text)
     refresh_monitor_btn.click(fn=get_system_metrics, outputs=[
@@ -464,30 +459,21 @@ with gr.Blocks(title="本地RAG问答系统") as demo:
 
 def check_environment():
     """环境依赖检查"""
-    if SILICONFLOW_API_KEY and not SILICONFLOW_API_KEY.startswith("Your"):
-        print("✅ SiliconFlow API 密钥已配置")
+    if DEEPSEEK_API_KEY and not DEEPSEEK_API_KEY.startswith("Your"):
+        print("✅ DeepSeek API 密钥已配置")
         try:
-            result = call_siliconflow_api("你好，请回复'连接成功'", temperature=0.1, max_tokens=50)
+            result = call_deepseek_api("你好，请回复'连接成功'", temperature=0.1, max_tokens=50)
             if isinstance(result, str) and ("连接成功" in result or "你好" in result):
-                print("✅ SiliconFlow API 连接测试成功")
+                print("✅ DeepSeek API 连接测试成功")
             else:
-                print("⚠️ SiliconFlow API 响应异常，但继续运行")
+                print("⚠️ DeepSeek API 响应异常，但继续运行")
             return True
         except Exception as e:
-            print(f"⚠️ SiliconFlow API 测试失败: {e}")
+            print(f"⚠️ DeepSeek API 测试失败: {e}")
             return True
     else:
-        print("⚠️ 未配置 SiliconFlow API 密钥，将尝试使用本地 Ollama")
-        try:
-            import requests
-            resp = requests.get("http://localhost:11434/api/tags", timeout=3)
-            if resp.status_code == 200:
-                print("✅ 本地 Ollama 服务可用")
-                return True
-        except Exception:
-            pass
-        print("❌ 未找到任何可用的 LLM 后端")
-        print("   请在 .env 中配置 SILICONFLOW_API_KEY 或启动 Ollama 服务")
+        print("❌ 未配置可用的 DeepSeek API 密钥")
+        print("   请在 .env 中配置 DEEPSEEK_API_KEY（或兼容的 SILICONFLOW_API_KEY）")
         return False
 
 

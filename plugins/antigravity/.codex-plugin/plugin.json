@@ -1,0 +1,48 @@
+{
+  "name": "antigravity",
+  "version": "0.1.0",
+  "description": "Local Antigravity plugin scaffold.",
+  "author": {
+    "name": "Local Workspace",
+    "email": "noreply@example.com",
+    "url": "https://example.com/antigravity"
+  },
+  "homepage": "https://example.com/antigravity",
+  "repository": "https://example.com/antigravity",
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "local-plugin"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "Antigravity",
+    "shortDescription": "Local Antigravity plugin scaffold",
+    "longDescription": "A local scaffold for the Antigravity plugin. Extend skills, hooks, and MCP integrations as needed.",
+    "developerName": "Local Workspace",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://example.com/antigravity",
+    "privacyPolicyURL": "https://example.com/privacy",
+    "termsOfServiceURL": "https://example.com/terms",
+    "defaultPrompt": [
+      "Summarize my current task list and suggest priorities.",
+      "Review this repo and propose quick productivity wins.",
+      "Generate a focused next-step checklist for this project."
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png",
+    "screenshots": [
+      "./assets/screenshot1.png",
+      "./assets/screenshot2.png",
+      "./assets/screenshot3.png"
+    ]
+  }
+}

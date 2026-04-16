@@ -1,20 +1,20 @@
 """
-LLM 调用 —— 大模型回答生成（Ollama + SiliconFlow）
+LLM 调用 —— 大模型回答生成（DeepSeek）
 
 学习要点：
 - Prompt Engineering：如何构建高质量的提示词模板
 - 流式输出 vs 非流式输出的区别
-- 多模型适配：本地 Ollama 和云端 SiliconFlow API 的对接
+- 云端 DeepSeek API 的对接
 """
 
 import json
 import logging
 import requests
+from typing import Any, List, Optional
 from config import (
-    SILICONFLOW_API_KEY, SILICONFLOW_API_URL,
-    SILICONFLOW_MODEL_NAME, OLLAMA_MODEL_NAME
+    DEEPSEEK_API_KEY, DEEPSEEK_API_URL,
+    DEEPSEEK_MODEL_NAME
 )
-from utils.network import get_session
 from core.retriever import recursive_retrieval
 from core.vector_store import vector_store
 from features.conflict_detector import detect_conflicts, evaluate_source_credibility
@@ -24,24 +24,15 @@ CONNECT_TIMEOUT = 8
 READ_TIMEOUT = 45
 
 
-def _ollama_available():
-    """快速探测本地 Ollama 是否可用，避免长时间重试等待。"""
-    try:
-        resp = get_session().get("http://localhost:11434/api/tags", timeout=(2, 3))
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def call_siliconflow_api(prompt, temperature=0.7, max_tokens=1024):
-    """调用 SiliconFlow 云端 API 获取回答"""
-    if not SILICONFLOW_API_KEY:
-        logging.error("未设置 SILICONFLOW_API_KEY")
-        return "错误：未配置 SiliconFlow API 密钥。"
+def call_deepseek_api(prompt, temperature=0.7, max_tokens=1024):
+    """调用 DeepSeek 云端 API 获取回答"""
+    if not DEEPSEEK_API_KEY:
+        logging.error("未设置 DEEPSEEK_API_KEY")
+        return "错误：未配置 DeepSeek API 密钥。"
 
     try:
         payload = {
-            "model": SILICONFLOW_MODEL_NAME,
+            "model": DEEPSEEK_MODEL_NAME,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False, "max_tokens": max_tokens,
             "temperature": temperature, "top_p": 0.7, "top_k": 50,
@@ -49,12 +40,12 @@ def call_siliconflow_api(prompt, temperature=0.7, max_tokens=1024):
             "response_format": {"type": "text"}
         }
         headers = {
-            "Authorization": f"Bearer {SILICONFLOW_API_KEY.strip()}",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY.strip()}",
             "Content-Type": "application/json; charset=utf-8"
         }
         json_payload = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         response = requests.post(
-            SILICONFLOW_API_URL,
+            DEEPSEEK_API_URL,
             data=json_payload,
             headers=headers,
             timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
@@ -72,35 +63,17 @@ def call_siliconflow_api(prompt, temperature=0.7, max_tokens=1024):
         return "API返回结果格式异常"
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"调用SiliconFlow API时出错: {str(e)}")
+        logging.error(f"调用DeepSeek API时出错: {str(e)}")
         return f"调用API时出错: {str(e)}"
     except Exception as e:
-        logging.error(f"SiliconFlow API 未知错误: {str(e)}")
+        logging.error(f"DeepSeek API 未知错误: {str(e)}")
         return f"发生未知错误: {str(e)}"
 
 
-def call_llm_simple(prompt, model_choice="siliconflow"):
-    """简单的 LLM 调用（用于递归检索中的查询改写判断）"""
-    if model_choice == "siliconflow":
-        # 改写查询对体验提升有限，但会增加一次远端调用和等待；
-        # 在云端模式下默认跳过，避免“提问无响应”的体感。
-        return "不需要进一步查询"
-
-    if not _ollama_available():
-        return "不需要进一步查询"
-
-    try:
-        response = get_session().post(
-            "http://localhost:11434/api/generate",
-            json={"model": OLLAMA_MODEL_NAME, "prompt": prompt, "stream": False},
-            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
-        )
-        response.raise_for_status()
-        result = response.json().get("response", "").strip()
-        return result if result else "不需要进一步查询"
-    except Exception as e:
-        logging.warning(f"查询改写调用失败，跳过后续迭代: {e}")
-        return "不需要进一步查询"
+def call_llm_simple(prompt, model_choice="deepseek"):
+    """简单的 LLM 调用（用于递归检索中的查询改写判断）。"""
+    # 查询改写对当前云端路径的收益有限，默认跳过以减少额外等待。
+    return "不需要进一步查询"
 
 
 def _is_error_text(text):
@@ -111,40 +84,86 @@ def _is_error_text(text):
     return any(k in text for k in keywords)
 
 
-def _call_ollama(prompt):
-    """统一的 Ollama 非流式调用。"""
-    if not _ollama_available():
-        return "系统错误: 本地 Ollama 未启动或不可访问（localhost:11434）。"
+def _extract_message_text(content: Any) -> str:
+    """兼容 Gradio Chatbot 多种 content 结构，提取纯文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                if text:
+                    parts.append(str(text).strip())
+            elif isinstance(item, str):
+                parts.append(item.strip())
+        return "\n".join([p for p in parts if p]).strip()
+    return str(content).strip()
 
-    response = get_session().post(
-        "http://localhost:11434/api/generate",
-        json={"model": OLLAMA_MODEL_NAME, "prompt": prompt, "stream": False},
-        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-        headers={'Connection': 'close'}
-    )
-    response.raise_for_status()
-    return str(response.json().get("response", "未获取到有效回答"))
+
+def _normalize_chat_history(chat_history: Optional[List[dict]], max_messages: int = 8) -> List[dict]:
+    """将历史对话标准化为 role/content 文本结构，仅保留最近若干条消息。"""
+    if not chat_history or not isinstance(chat_history, list):
+        return []
+
+    normalized = []
+    for msg in chat_history:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _extract_message_text(msg.get("content", ""))
+        if not text:
+            continue
+        normalized.append({"role": role, "content": text})
+
+    return normalized[-max_messages:]
 
 
-def _call_ollama_stream(prompt):
-    """统一的 Ollama 流式调用。"""
-    if not _ollama_available():
-        raise RuntimeError("本地 Ollama 未启动或不可访问（localhost:11434）。")
+def _build_history_text(chat_history: Optional[List[dict]], max_chars: int = 1400) -> str:
+    """构建用于 Prompt 的历史对话文本。"""
+    normalized = _normalize_chat_history(chat_history)
+    if not normalized:
+        return "无"
 
-    response = get_session().post(
-        "http://localhost:11434/api/generate",
-        json={"model": OLLAMA_MODEL_NAME, "prompt": prompt, "stream": True},
-        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-        stream=True
-    )
-    response.raise_for_status()
-    return response
+    lines = []
+    for item in normalized:
+        prefix = "用户" if item["role"] == "user" else "助手"
+        lines.append(f"{prefix}: {item['content']}")
+
+    history_text = "\n".join(lines).strip()
+    if len(history_text) > max_chars:
+        history_text = history_text[-max_chars:]
+    return history_text
+
+
+def _build_retrieval_query(question: str, chat_history: Optional[List[dict]]) -> str:
+    """基于最近用户消息构建历史感知检索查询。"""
+    normalized = _normalize_chat_history(chat_history)
+    if not normalized:
+        return question
+
+    recent_user_msgs = [m["content"] for m in normalized if m["role"] == "user" and m["content"].strip()]
+    recent_user_msgs = recent_user_msgs[-2:]
+    if not recent_user_msgs:
+        return question
+
+    context = "；".join([m for m in recent_user_msgs if m.strip()])
+    if context:
+        return f"{context}；{question}"
+    return question
 
 
 def _build_prompt(question, context, enable_web_search, knowledge_base_exists,
-                  time_sensitive, conflict_detected):
+                  time_sensitive, conflict_detected, history_text="无"):
     """构建提示词"""
     prompt_template = """作为一个专业的问答助手，你需要基于以下{context_type}回答用户问题。
+
+历史对话（用于理解代词、省略和上下文）：
+{history_text}
 
 提供的参考内容：
 {context}
@@ -163,6 +182,7 @@ def _build_prompt(question, context, enable_web_search, knowledge_base_exists,
     return prompt_template.format(
         context_type="本地文档和网络搜索结果" if enable_web_search and knowledge_base_exists else (
             "网络搜索结果" if enable_web_search else "本地文档"),
+        history_text=history_text,
         context=context if context else (
             "网络搜索结果将用于回答。" if enable_web_search and not knowledge_base_exists else "知识库为空或未找到相关内容。"),
         question=question,
@@ -196,7 +216,7 @@ def _build_context(all_contexts, all_doc_ids, all_metadata, enable_web_search):
     return "\n\n".join(context_parts), sources_for_conflict
 
 
-def query_answer(question, enable_web_search=False, model_choice="siliconflow", progress=None):
+def query_answer(question, enable_web_search=False, model_choice="deepseek", progress=None, chat_history=None):
     """
     问答处理主流程（非流式）
 
@@ -210,24 +230,25 @@ def query_answer(question, enable_web_search=False, model_choice="siliconflow", 
         if progress:
             progress(0.3, desc="执行递归检索...")
 
+        retrieval_query = _build_retrieval_query(question, chat_history)
         all_contexts, all_doc_ids, all_metadata = recursive_retrieval(
-            initial_query=question, enable_web_search=enable_web_search, model_choice=model_choice
+            initial_query=retrieval_query, enable_web_search=enable_web_search, model_choice=model_choice
         )
 
         context, sources = _build_context(all_contexts, all_doc_ids, all_metadata, enable_web_search)
         conflict_detected = detect_conflicts(sources)
         time_sensitive = any(w in question for w in ["最新", "今年", "当前", "最近", "刚刚"])
+        history_text = _build_history_text(chat_history)
 
         prompt = _build_prompt(question, context, enable_web_search,
-                               knowledge_base_exists, time_sensitive, conflict_detected)
+                               knowledge_base_exists, time_sensitive, conflict_detected, history_text)
 
         if progress:
             progress(0.8, desc="生成回答...")
 
-        if model_choice == "siliconflow":
-            result = call_siliconflow_api(prompt, temperature=0.7, max_tokens=1536)
-        else:
-            result = _call_ollama(prompt)
+        if model_choice != "deepseek":
+            logging.info(f"模型选项 {model_choice} 已回退为 deepseek")
+        result = call_deepseek_api(prompt, temperature=0.7, max_tokens=1536)
 
         if _is_error_text(result):
             return result
@@ -240,7 +261,7 @@ def query_answer(question, enable_web_search=False, model_choice="siliconflow", 
         return f"系统错误: {str(e)}"
 
 
-def stream_answer(question, enable_web_search=False, model_choice="siliconflow", progress=None):
+def stream_answer(question, enable_web_search=False, model_choice="deepseek", progress=None, chat_history=None):
     """问答处理主流程（流式，用于 Gradio generator 模式）"""
     try:
         knowledge_base_exists = vector_store.is_ready
@@ -251,36 +272,26 @@ def stream_answer(question, enable_web_search=False, model_choice="siliconflow",
         if progress:
             progress(0.3, desc="执行递归检索...")
 
+        retrieval_query = _build_retrieval_query(question, chat_history)
         all_contexts, all_doc_ids, all_metadata = recursive_retrieval(
-            initial_query=question, enable_web_search=enable_web_search, model_choice=model_choice
+            initial_query=retrieval_query, enable_web_search=enable_web_search, model_choice=model_choice
         )
 
         context, sources = _build_context(all_contexts, all_doc_ids, all_metadata, enable_web_search)
         conflict_detected = detect_conflicts(sources)
         time_sensitive = any(w in question for w in ["最新", "今年", "当前", "最近", "刚刚"])
+        history_text = _build_history_text(chat_history)
 
         prompt = _build_prompt(question, context, enable_web_search,
-                               knowledge_base_exists, time_sensitive, conflict_detected)
+                               knowledge_base_exists, time_sensitive, conflict_detected, history_text)
 
-        if model_choice == "siliconflow":
-            full_answer = call_siliconflow_api(prompt, temperature=0.7, max_tokens=1536)
-            if _is_error_text(full_answer):
-                yield full_answer, "遇到错误"
-                return
-            yield process_thinking_content(full_answer), "完成!"
-        else:
-            response = _call_ollama_stream(prompt)
-            full_answer = ""
-            for line in response.iter_lines():
-                if line:
-                    chunk = json.loads(line.decode()).get("response", "")
-                    full_answer += chunk
-                    if "<think>" in full_answer and "</think>" in full_answer:
-                        yield process_thinking_content(full_answer), "生成回答中..."
-                    else:
-                        yield full_answer, "生成回答中..."
-
-            yield process_thinking_content(full_answer), "完成!"
+        if model_choice != "deepseek":
+            logging.info(f"模型选项 {model_choice} 已回退为 deepseek")
+        full_answer = call_deepseek_api(prompt, temperature=0.7, max_tokens=1536)
+        if _is_error_text(full_answer):
+            yield full_answer, "遇到错误"
+            return
+        yield process_thinking_content(full_answer), "完成!"
 
     except Exception as e:
         yield f"系统错误: {str(e)}", "遇到错误"

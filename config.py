@@ -29,19 +29,27 @@ load_dotenv(dotenv_path)
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 SEARCH_ENGINE = "google"
 
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
-SILICONFLOW_API_URL = os.getenv(
-    "SILICONFLOW_API_URL",
-    "https://api.siliconflow.cn/v1/chat/completions"
+# 主命名使用 DeepSeek；保留 SiliconFlow 变量名兼容旧配置
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", os.getenv("SILICONFLOW_API_KEY"))
+DEEPSEEK_API_URL = os.getenv(
+    "DEEPSEEK_API_URL",
+    os.getenv("SILICONFLOW_API_URL", "https://api.deepseek.com/chat/completions")
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 第三步：模型名称配置
-# Ollama 格式: deepseek-r1:8b | SiliconFlow 格式: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+# DeepSeek API 格式: deepseek-chat
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "deepseek-r1:8b")
-SILICONFLOW_MODEL_NAME = os.getenv("SILICONFLOW_MODEL_NAME", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+DEEPSEEK_MODEL_NAME = os.getenv(
+    "DEEPSEEK_MODEL_NAME",
+    os.getenv("SILICONFLOW_MODEL_NAME", "deepseek-chat")
+)
 RERANK_METHOD = os.getenv("RERANK_METHOD", "cross_encoder")
+
+# 兼容旧变量名导入（避免现有模块立即失效）
+SILICONFLOW_API_KEY = DEEPSEEK_API_KEY
+SILICONFLOW_API_URL = DEEPSEEK_API_URL
+SILICONFLOW_MODEL_NAME = DEEPSEEK_MODEL_NAME
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 第四步：RAG 超参数
@@ -66,26 +74,12 @@ requests.adapters.DEFAULT_RETRIES = 3
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def detect_default_model():
     """
-    自动检测可用的 LLM 后端，返回默认模型选择
-
-    检测优先级：
-    1. SiliconFlow API Key 已配置 → 默认使用云端 API
-    2. 本地 Ollama 服务可用 → 默认使用本地模型
-    3. 都不可用 → 返回 siliconflow 并提示用户配置
+    当前版本固定使用 DeepSeek 云端后端
     """
-    if SILICONFLOW_API_KEY and SILICONFLOW_API_KEY.strip() and not SILICONFLOW_API_KEY.startswith("Your"):
-        logging.info("✅ 检测到 SiliconFlow API Key，默认使用云端模型")
-        return "siliconflow"
-
-    try:
-        response = requests.get("http://localhost:11434/api/tags", timeout=3)
-        if response.status_code == 200:
-            logging.info("✅ 检测到本地 Ollama 服务，默认使用本地模型")
-            return "ollama"
-    except Exception:
-        pass
-
-    logging.warning("⚠️ 未检测到可用 LLM 后端，请配置 SiliconFlow API Key 或启动 Ollama")
-    return "siliconflow"
+    if DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip() and not DEEPSEEK_API_KEY.startswith("Your"):
+        logging.info("✅ 检测到 DeepSeek API Key，默认使用云端模型")
+    else:
+        logging.warning("⚠️ 未配置可用的 DeepSeek API Key，请在 .env 中设置 DEEPSEEK_API_KEY（或兼容的 SILICONFLOW_API_KEY）")
+    return "deepseek"
 
 DEFAULT_MODEL_CHOICE = detect_default_model()

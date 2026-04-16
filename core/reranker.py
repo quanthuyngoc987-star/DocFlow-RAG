@@ -9,10 +9,8 @@
 """
 
 import logging
-import re
 import threading
-from functools import lru_cache
-from config import OLLAMA_MODEL_NAME, RERANK_METHOD
+from config import RERANK_METHOD
 
 # 交叉编码器（懒加载 + 线程安全）
 _cross_encoder = None
@@ -62,45 +60,9 @@ def rerank_with_cross_encoder(query, docs, doc_ids, metadata_list, top_k=5):
         return _fallback_results(doc_ids, docs, metadata_list)
 
 
-@lru_cache(maxsize=32)
-def get_llm_relevance_score(query, doc):
-    """使用 LLM 对查询和文档的相关性进行评分（带缓存）"""
-    from utils.network import get_session
-    try:
-        prompt = f"""给定以下查询和文档片段，评估它们的相关性。
-        评分标准：0分表示完全不相关，10分表示高度相关。
-        只需返回一个0-10之间的整数分数，不要有任何其他解释。
-
-        查询: {query}
-        文档片段: {doc}
-        相关性分数(0-10):"""
-
-        response = get_session().post(
-            "http://localhost:11434/api/generate",
-            json={"model": OLLAMA_MODEL_NAME, "prompt": prompt, "stream": False},
-            timeout=180
-        )
-        result = response.json().get("response", "").strip()
-        try:
-            return max(0, min(10, float(result)))
-        except ValueError:
-            match = re.search(r'\b([0-9]|10)\b', result)
-            return float(match.group(1)) if match else 5.0
-    except Exception as e:
-        logging.error(f"LLM评分失败: {str(e)}")
-        return 5.0
-
-
 def rerank_with_llm(query, docs, doc_ids, metadata_list, top_k=5):
-    """使用 LLM 逐一评分进行重排序"""
-    if not docs:
-        return []
-    results = []
-    for doc_id, doc, meta in zip(doc_ids, docs, metadata_list):
-        score = get_llm_relevance_score(query, doc)
-        results.append((doc_id, {'content': doc, 'metadata': meta, 'score': score / 10.0}))
-    results = sorted(results, key=lambda x: x[1]['score'], reverse=True)
-    return results[:top_k]
+    """兼容旧配置入口，内部回退到交叉编码器重排序。"""
+    return rerank_with_cross_encoder(query, docs, doc_ids, metadata_list, top_k)
 
 
 def rerank_results(query, docs, doc_ids, metadata_list, method=None, top_k=5):
